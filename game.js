@@ -9,8 +9,9 @@ const playBtn     = document.getElementById('play-btn');
 const timerBar    = document.getElementById('timer-bar');
 const timerText   = document.getElementById('timer-text');
 const coinText    = document.getElementById('coin-text');
-const scoreScreen = document.getElementById('score-screen');
-const scoreText   = document.getElementById('score-text');
+const scoreScreen  = document.getElementById('score-screen');
+const scoreText    = document.getElementById('score-text');
+const restartBtn   = document.getElementById('restart-btn');
 
 let playerAlive = true;
 let gameState   = 'playing'; // 'playing' | 'won'
@@ -24,6 +25,41 @@ playBtn.addEventListener('click', () => {
   player.respawn(grid);
   playerAlive = true;
 });
+
+restartBtn.addEventListener('click', () => {
+  scoreScreen.classList.remove('visible');
+  resetGame();
+});
+
+function resetGame() {
+  // wipe grid
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      grid.cells[r][c] = null;
+
+  // reset player
+  player.col = Math.floor(COLS / 2);
+  player.row = Math.floor(ROWS / 2);
+  player.x   = player.col * CELL;
+  player.y   = player.row * CELL;
+  player.trail    = [];
+  player.trailSet = new Set();
+  player.initTerritory(grid);
+  playerAlive = true;
+
+  // reset enemies
+  enemies.length = 0;
+  ENEMY_COLORS.forEach(color => {
+    const spawn = findFreeSpawn(grid);
+    if (!spawn) return;
+    const e = new Enemy(spawn.row, spawn.col, color);
+    e.initTerritory(grid);
+    enemies.push(e);
+  });
+
+  gameState = 'playing';
+  pickups   = [];
+}
 
 function allCellsOwned() {
   for (let r = 0; r < ROWS; r++)
@@ -94,14 +130,40 @@ function updateWin(ts) {
   }
 }
 
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
 function drawPickups() {
   for (const p of pickups) {
-    const x = p.col * CELL + CELL / 2;
-    const y = p.row * CELL + CELL / 2;
+    const x  = p.col * CELL + CELL / 2;
+    const y  = p.row * CELL + CELL / 2;
+    const r  = CELL * 0.32;
+    const color = p.type === 'coin' ? '#ffd700' : '#06d6a0';
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur  = 10;
     ctx.beginPath();
-    ctx.arc(x, y, CELL * 0.35, 0, Math.PI * 2);
-    ctx.fillStyle = p.type === 'coin' ? '#ffd700' : '#06d6a0';
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
     ctx.fill();
+    // inner shine
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(x - r * 0.25, y - r * 0.25, r * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fill();
+    ctx.restore();
   }
 }
 
@@ -125,13 +187,22 @@ class Grid {
       for (let col = 0; col < COLS; col++) {
         const x = col * CELL;
         const y = row * CELL;
+        const owned = this.cells[row][col];
 
-        // fill
-        ctx.fillStyle = this.cells[row][col] ?? '#16213e';
-        ctx.fillRect(x, y, CELL, CELL);
+        if (owned) {
+          // owned cell: solid fill + lighter inner highlight
+          ctx.fillStyle = owned;
+          ctx.fillRect(x, y, CELL, CELL);
+          ctx.fillStyle = 'rgba(255,255,255,0.07)';
+          ctx.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
+        } else {
+          // empty cell: dark base
+          ctx.fillStyle = '#0f1929';
+          ctx.fillRect(x, y, CELL, CELL);
+        }
 
-        // grid line
-        ctx.strokeStyle = '#1e2d4a';
+        // subtle grid line
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
         ctx.lineWidth = 0.5;
         ctx.strokeRect(x, y, CELL, CELL);
       }
@@ -151,7 +222,7 @@ class Player {
     this.x = this.col * CELL;
     this.y = this.row * CELL;
     this.color = '#e94560';
-    this.trailColor = '#ff8fa3';  // lighter pink for the trail
+    this.trailColor = 'rgba(233,69,96,0.6)';
     this.trail = [];              // ordered list of {row, col}
     this.trailSet = new Set();    // fast lookup
   }
@@ -253,11 +324,27 @@ class Player {
   }
 
   draw() {
-    ctx.fillStyle = this.trailColor;
-    for (const { row, col } of this.trail)
-      ctx.fillRect(col * CELL, row * CELL, CELL, CELL);
-    ctx.fillStyle = this.color;
-    ctx.fillRect(this.x, this.y, CELL, CELL);
+    // trail — dashed bright line with transparency
+    for (const { row, col } of this.trail) {
+      const tx = col * CELL, ty = row * CELL;
+      ctx.fillStyle = this.trailColor;
+      ctx.fillRect(tx + 2, ty + 2, CELL - 4, CELL - 4);
+    }
+
+    // player square with glow
+    const cx = this.x + CELL / 2, cy = this.y + CELL / 2;
+    ctx.save();
+    ctx.shadowColor  = this.color;
+    ctx.shadowBlur   = 12;
+    ctx.fillStyle    = this.color;
+    roundRect(ctx, this.x + 1, this.y + 1, CELL - 2, CELL - 2, 4);
+    ctx.fill();
+    // bright centre dot
+    ctx.shadowBlur  = 0;
+    ctx.fillStyle   = 'rgba(255,255,255,0.55)';
+    roundRect(ctx, cx - 3, cy - 3, 6, 6, 2);
+    ctx.fill();
+    ctx.restore();
   }
 }
 
@@ -372,11 +459,24 @@ class Enemy {
   }
 
   draw() {
-    ctx.fillStyle = this.trailColor;
-    for (const { row, col } of this.trail)
-      ctx.fillRect(col * CELL, row * CELL, CELL, CELL);
-    ctx.fillStyle = this.color;
-    ctx.fillRect(this.x, this.y, CELL, CELL);
+    for (const { row, col } of this.trail) {
+      const tx = col * CELL, ty = row * CELL;
+      ctx.fillStyle = this.trailColor;
+      ctx.fillRect(tx + 2, ty + 2, CELL - 4, CELL - 4);
+    }
+
+    const cx = this.x + CELL / 2, cy = this.y + CELL / 2;
+    ctx.save();
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur  = 10;
+    ctx.fillStyle   = this.color;
+    roundRect(ctx, this.x + 1, this.y + 1, CELL - 2, CELL - 2, 4);
+    ctx.fill();
+    ctx.shadowBlur  = 0;
+    ctx.fillStyle   = 'rgba(255,255,255,0.4)';
+    roundRect(ctx, cx - 3, cy - 3, 6, 6, 2);
+    ctx.fill();
+    ctx.restore();
   }
 }
 

@@ -87,6 +87,14 @@
     #score-screen.visible { display: flex; }
     #score-screen h1 { color: #ffd700; font: bold 48px sans-serif; }
     #score-screen p  { color: #fff; font: 26px sans-serif; }
+    #restart-btn {
+      background: #ffd700; color: #0a0a1a;
+      border: none; border-radius: 8px;
+      font: bold 22px sans-serif;
+      padding: 12px 48px; cursor: pointer;
+      transition: background 0.15s;
+    }
+    #restart-btn:hover { background: #e6c200; }
   </style>
 </head>
 <body>
@@ -115,6 +123,7 @@
   <div id="score-screen">
     <h1>Time's up!</h1>
     <p id="score-text">You collected 0 coins</p>
+    <button id="restart-btn">Play</button>
   </div>
 
   <div id="minimap-wrap">
