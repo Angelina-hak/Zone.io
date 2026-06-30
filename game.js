@@ -286,15 +286,147 @@ const enemies = ENEMY_STARTS.map(({ row, col }, i) => {
   return e;
 });
 
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 48px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('YOU LOST', canvas.width / 2, canvas.height / 2 - 20);
+  ctx.font = '20px sans-serif';
+  ctx.fillText('Refresh to play again', canvas.width / 2, canvas.height / 2 + 24);
+}
+
+function transferTerritory(deadColor, killerColor) {
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (grid.cells[r][c] === deadColor) grid.cells[r][c] = killerColor;
+}
+
+function checkCollisions() {
+  let playerDead = false;
+  let playerKiller = null;
+
+  // ── territory hits ────────────────────────────────────────────────────────
+  // stepping into an owned territory cell kills the intruder
+  const territorySurviving = enemies.filter(e => {
+    if (grid.cells[e.row][e.col] === player.color) {
+      // enemy entered player's territory → enemy dies, player gets their territory
+      transferTerritory(e.color, player.color);
+      return false;
+    }
+    if (grid.cells[player.row][player.col] === e.color) {
+      // player entered enemy's territory → player dies, enemy gets player's territory
+      playerDead = true;
+      playerKiller = e;
+    }
+    return true;
+  });
+
+  // enemy-vs-enemy territory hits
+  const territoryDeadEnemies = new Set();
+  for (let i = 0; i < territorySurviving.length; i++) {
+    for (let j = 0; j < territorySurviving.length; j++) {
+      if (i === j || territoryDeadEnemies.has(i)) continue;
+      const intruder = territorySurviving[i];
+      const owner    = territorySurviving[j];
+      if (grid.cells[intruder.row][intruder.col] === owner.color) {
+        territoryDeadEnemies.add(i);
+        transferTerritory(intruder.color, owner.color);
+      }
+    }
+  }
+  const afterTerritory = territorySurviving.filter((_, i) => !territoryDeadEnemies.has(i));
+
+  // ── trail hits ────────────────────────────────────────────────────────────
+  const trailSurviving = afterTerritory.filter(e => {
+    if (player.trailSet.has(`${e.row},${e.col}`)) {
+      // enemy touched player's trail → player (trail owner) dies
+      playerDead = true;
+      playerKiller = e;
+    }
+    if (e.trailSet.has(`${player.row},${player.col}`)) {
+      // player touched enemy's trail → enemy (trail owner) dies, player gets territory
+      transferTerritory(e.color, player.color);
+      return false;
+    }
+    return true;
+  });
+
+  // ── enemy-vs-enemy trail hits ─────────────────────────────────────────────
+  // touching an enemy's trail kills that enemy (trail owner loses)
+  const trailDeadEnemies = new Set();
+  for (let i = 0; i < trailSurviving.length; i++) {
+    for (let j = 0; j < trailSurviving.length; j++) {
+      if (i === j || trailDeadEnemies.has(j)) continue;
+      const mover = trailSurviving[i];
+      const owner = trailSurviving[j];
+      if (owner.trailSet.has(`${mover.row},${mover.col}`)) {
+        // mover touched owner's trail → owner dies, mover gets territory
+        trailDeadEnemies.add(j);
+        transferTerritory(owner.color, mover.color);
+      }
+    }
+  }
+  const bodyCheckList = trailSurviving.filter((_, i) => !trailDeadEnemies.has(i));
+
+  // ── body-to-body hits ─────────────────────────────────────────────────────
+  // The mover (attacker) kills the target and gains their territory.
+  const deadEnemies = new Set();
+
+  for (let i = 0; i < bodyCheckList.length; i++) {
+    const a = bodyCheckList[i];
+
+    // enemy moved onto player's cell → player dies, enemy gets territory
+    if (a.row === player.row && a.col === player.col) {
+      playerDead = true;
+      playerKiller = a;
+    }
+
+    // player moved onto enemy's cell → enemy dies, player gets territory
+    if (!deadEnemies.has(i) && player.row === a.row && player.col === a.col) {
+      deadEnemies.add(i);
+      transferTerritory(a.color, player.color);
+    }
+
+    // enemy A runs into enemy B's body → B dies, A gets territory
+    for (let j = 0; j < bodyCheckList.length; j++) {
+      if (i === j || deadEnemies.has(j)) continue;
+      const b = bodyCheckList[j];
+      if (a.row === b.row && a.col === b.col) {
+        deadEnemies.add(j);
+        transferTerritory(b.color, a.color);
+      }
+    }
+  }
+
+  const bodySurviving = bodyCheckList.filter((_, i) => !deadEnemies.has(i));
+
+  enemies.length = 0;
+  bodySurviving.forEach(e => enemies.push(e));
+
+  if (playerDead && playerKiller) transferTerritory(player.color, playerKiller.color);
+
+  return playerDead;
+}
+
 function loop() {
   player.update(keys, grid);
   enemies.forEach(e => e.update(grid));
+
+  const playerDead = checkCollisions();
 
   grid.draw();
   enemies.forEach(e => e.draw());
   player.draw();
 
+  if (playerDead) {
+    drawGameOver();
+    return;
+  }
+
   requestAnimationFrame(loop);
 }
+
 
 loop();
