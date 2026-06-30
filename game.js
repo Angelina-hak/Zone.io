@@ -12,6 +12,7 @@ const coinText    = document.getElementById('coin-text');
 const scoreScreen  = document.getElementById('score-screen');
 const scoreText    = document.getElementById('score-text');
 const restartBtn   = document.getElementById('restart-btn');
+const scoreboard   = document.getElementById('scoreboard');
 
 let playerAlive = true;
 let gameState   = 'playing'; // 'playing' | 'won'
@@ -96,9 +97,6 @@ function spawnPickups() {
   pickups = [];
   // ~40 coins spread across territory
   owned.slice(0, Math.min(40, owned.length)).forEach(p => pickups.push({ ...p, type: 'coin' }));
-  // exactly 1 time bonus at a random owned cell (after the coins)
-  const timeCell = owned[Math.min(40, owned.length - 1)];
-  if (timeCell) pickups.push({ ...timeCell, type: 'time' });
 }
 
 function updateWin(ts) {
@@ -110,12 +108,8 @@ function updateWin(ts) {
 
   pickups = pickups.filter(p => {
     if (p.row === player.row && p.col === player.col) {
-      if (p.type === 'coin') {
-        coinCount++;
-        coinText.textContent = String(coinCount);
-      } else {
-        timeLeft += 3;
-      }
+      coinCount++;
+      coinText.textContent = String(coinCount);
       return false;
     }
     return true;
@@ -174,6 +168,11 @@ const ROWS  = 50;
 canvas.width  = COLS * CELL;  // 800
 canvas.height = ROWS * CELL;  // 800
 
+const ZOOM   = 2;
+const VIEW_W = canvas.width  / ZOOM;  // visible world pixels
+const VIEW_H = canvas.height / ZOOM;
+let camX = 0, camY = 0;
+
 // ── Grid ─────────────────────────────────────────────────────────────────────
 
 class Grid {
@@ -183,8 +182,12 @@ class Grid {
   }
 
   draw() {
-    for (let row = 0; row < ROWS; row++) {
-      for (let col = 0; col < COLS; col++) {
+    const c0 = Math.max(0, Math.floor(camX / CELL));
+    const c1 = Math.min(COLS, Math.ceil((camX + VIEW_W) / CELL) + 1);
+    const r0 = Math.max(0, Math.floor(camY / CELL));
+    const r1 = Math.min(ROWS, Math.ceil((camY + VIEW_H) / CELL) + 1);
+    for (let row = r0; row < r1; row++) {
+      for (let col = c0; col < c1; col++) {
         const x = col * CELL;
         const y = row * CELL;
         const owned = this.cells[row][col];
@@ -238,10 +241,12 @@ class Player {
   }
 
   update(keys, grid) {
-    if (keys['ArrowUp'])    this.y -= this.speed;
-    if (keys['ArrowDown'])  this.y += this.speed;
-    if (keys['ArrowLeft'])  this.x -= this.speed;
-    if (keys['ArrowRight']) this.x += this.speed;
+    const spd = (keys['Shift'] || keys['ShiftLeft'] || keys['ShiftRight']) ? 5 : this.speed;
+    this.boosting = spd > this.speed;
+    if (keys['ArrowUp'])    this.y -= spd;
+    if (keys['ArrowDown'])  this.y += spd;
+    if (keys['ArrowLeft'])  this.x -= spd;
+    if (keys['ArrowRight']) this.x += spd;
 
     this.x = Math.max(0, Math.min(canvas.width  - CELL, this.x));
     this.y = Math.max(0, Math.min(canvas.height - CELL, this.y));
@@ -331,11 +336,10 @@ class Player {
       ctx.fillRect(tx + 2, ty + 2, CELL - 4, CELL - 4);
     }
 
-    // player square with glow
     const cx = this.x + CELL / 2, cy = this.y + CELL / 2;
     ctx.save();
     ctx.shadowColor  = this.color;
-    ctx.shadowBlur   = 12;
+    ctx.shadowBlur   = this.boosting ? 22 : 12;
     ctx.fillStyle    = this.color;
     roundRect(ctx, this.x + 1, this.y + 1, CELL - 2, CELL - 2, 4);
     ctx.fill();
@@ -394,11 +398,10 @@ class Enemy {
     if (this.x < 0 || this.x > canvas.width  - CELL) { this.dir = { dr: this.dir.dr, dc: -this.dir.dc }; this.x = Math.max(0, Math.min(canvas.width  - CELL, this.x)); }
     if (this.y < 0 || this.y > canvas.height - CELL) { this.dir = { dr: -this.dir.dr, dc: this.dir.dc }; this.y = Math.max(0, Math.min(canvas.height - CELL, this.y)); }
 
-    // randomly pick a new direction after stepTimer expires
     if (this.stepTimer >= this.turnEvery) {
-      this.dir = DIRS[Math.floor(Math.random() * DIRS.length)];
+      this.dir = this._chooseBestDir(grid);
       this.stepTimer = 0;
-      this.turnEvery = CELL * (4 + Math.floor(Math.random() * 8));
+      this.turnEvery = CELL * 3;
     }
 
     const newCol = Math.floor(this.x / CELL);
@@ -408,6 +411,41 @@ class Enemy {
       this.row = newRow;
       this._updateTrail(grid);
     }
+  }
+
+  _chooseBestDir(grid) {
+    // If player is trailing outside territory, 70% chance intercept their trail
+    if (player.trail.length > 0 && Math.random() < 0.7) {
+      const target = player.trail[Math.floor(player.trail.length / 2)];
+      const dr = target.row - this.row;
+      const dc = target.col - this.col;
+      const byRow = Math.abs(dr) >= Math.abs(dc);
+      const pref = byRow
+        ? (dr > 0 ? DIRS[1] : DIRS[0])
+        : (dc > 0 ? DIRS[3] : DIRS[2]);
+      const alt  = byRow
+        ? (dc > 0 ? DIRS[3] : DIRS[2])
+        : (dr > 0 ? DIRS[1] : DIRS[0]);
+      // don't reverse into own trail
+      const reverse = { dr: -this.dir.dr, dc: -this.dir.dc };
+      if (pref.dr !== reverse.dr || pref.dc !== reverse.dc) return pref;
+      if (alt.dr  !== reverse.dr || alt.dc  !== reverse.dc) return alt;
+    }
+    // Otherwise pick direction toward most unclaimed cells (3-cell lookahead)
+    let best = null, bestScore = -1;
+    for (const d of DIRS) {
+      if (d.dr === -this.dir.dr && d.dc === -this.dir.dc) continue; // no reverse
+      let score = 0;
+      for (let step = 1; step <= 3; step++) {
+        const nr = this.row + d.dr * step;
+        const nc = this.col + d.dc * step;
+        if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) { score -= 5; break; }
+        if (grid.cells[nr][nc] === null) score += 2;
+        else if (grid.cells[nr][nc] !== this.color) score += 1;
+      }
+      if (score > bestScore) { bestScore = score; best = d; }
+    }
+    return best ?? DIRS[Math.floor(Math.random() * DIRS.length)];
   }
 
   _updateTrail(grid) {
@@ -623,6 +661,29 @@ function drawMinimap() {
   });
 }
 
+function updateScoreboard() {
+  const total = ROWS * COLS;
+  const counts = new Map();
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++) {
+      const col = grid.cells[r][c];
+      if (col) counts.set(col, (counts.get(col) || 0) + 1);
+    }
+
+  const entries = [
+    { label: 'You', color: player.color, count: counts.get(player.color) || 0 },
+    ...enemies.map((e, i) => ({ label: `Bot ${i + 1}`, color: e.color, count: counts.get(e.color) || 0 })),
+  ].sort((a, b) => b.count - a.count);
+
+  scoreboard.innerHTML = entries.map(e =>
+    `<div class="sb-row">
+      <span class="sb-dot" style="background:${e.color}"></span>
+      <span class="sb-name">${e.label}</span>
+      <span class="sb-pct">${(e.count / total * 100).toFixed(1)}%</span>
+    </div>`
+  ).join('');
+}
+
 function loop(ts) {
   if (playerAlive) player.update(keys, grid);
 
@@ -634,12 +695,23 @@ function loop(ts) {
 
   if (gameState === 'won') updateWin(ts);
 
+  // update camera
+  camX = Math.max(0, Math.min(canvas.width  - VIEW_W, player.x + CELL / 2 - VIEW_W / 2));
+  camY = Math.max(0, Math.min(canvas.height - VIEW_H, player.y + CELL / 2 - VIEW_H / 2));
+
+  // draw world (zoomed + translated)
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.scale(ZOOM, ZOOM);
+  ctx.translate(-camX, -camY);
   grid.draw();
   drawPickups();
   enemies.forEach(e => e.draw());
-  player.draw();
+  if (playerAlive) player.draw();
+  ctx.restore();
 
   drawMinimap();
+  updateScoreboard();
 
   requestAnimationFrame(loop);
 }
