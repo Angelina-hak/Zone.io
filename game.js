@@ -1,7 +1,111 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-const CELL  = 16;   // pixels per grid cell
+const miniCanvas = document.getElementById('minimap');
+const mctx = miniCanvas.getContext('2d');
+
+const deathScreen = document.getElementById('death-screen');
+const playBtn     = document.getElementById('play-btn');
+const timerBar    = document.getElementById('timer-bar');
+const timerText   = document.getElementById('timer-text');
+const coinText    = document.getElementById('coin-text');
+const scoreScreen = document.getElementById('score-screen');
+const scoreText   = document.getElementById('score-text');
+
+let playerAlive = true;
+let gameState   = 'playing'; // 'playing' | 'won'
+let pickups     = [];
+let coinCount   = 0;
+let timeLeft    = 0;
+let lastTs      = null;
+
+playBtn.addEventListener('click', () => {
+  deathScreen.classList.remove('visible');
+  player.respawn(grid);
+  playerAlive = true;
+});
+
+function allCellsOwned() {
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (grid.cells[r][c] !== player.color) return false;
+  return true;
+}
+
+function triggerWin() {
+  gameState = 'won';
+  timeLeft  = 6;
+  coinCount = 0;
+  lastTs    = null;
+  coinText.textContent  = '0';
+  timerText.textContent = '6.0s';
+  timerBar.classList.add('visible');
+  scoreScreen.classList.remove('visible');
+  spawnPickups();
+}
+
+function spawnPickups() {
+  // collect all player-owned cells
+  const owned = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (grid.cells[r][c] === player.color) owned.push({ row: r, col: c });
+
+  // shuffle
+  for (let i = owned.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [owned[i], owned[j]] = [owned[j], owned[i]];
+  }
+
+  pickups = [];
+  // ~40 coins spread across territory
+  owned.slice(0, Math.min(40, owned.length)).forEach(p => pickups.push({ ...p, type: 'coin' }));
+  // exactly 1 time bonus at a random owned cell (after the coins)
+  const timeCell = owned[Math.min(40, owned.length - 1)];
+  if (timeCell) pickups.push({ ...timeCell, type: 'time' });
+}
+
+function updateWin(ts) {
+  if (lastTs === null) { lastTs = ts; return; }
+  const dt = (ts - lastTs) / 1000;
+  lastTs = ts;
+  timeLeft = Math.max(0, timeLeft - dt);
+  timerText.textContent = `${timeLeft.toFixed(1)}s`;
+
+  pickups = pickups.filter(p => {
+    if (p.row === player.row && p.col === player.col) {
+      if (p.type === 'coin') {
+        coinCount++;
+        coinText.textContent = String(coinCount);
+      } else {
+        timeLeft += 3;
+      }
+      return false;
+    }
+    return true;
+  });
+
+  if (timeLeft <= 0) {
+    timerBar.classList.remove('visible');
+    scoreText.textContent = `You collected ${coinCount} coin${coinCount !== 1 ? 's' : ''}`;
+    scoreScreen.classList.add('visible');
+    gameState = 'playing';
+    pickups   = [];
+  }
+}
+
+function drawPickups() {
+  for (const p of pickups) {
+    const x = p.col * CELL + CELL / 2;
+    const y = p.row * CELL + CELL / 2;
+    ctx.beginPath();
+    ctx.arc(x, y, CELL * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = p.type === 'coin' ? '#ffd700' : '#06d6a0';
+    ctx.fill();
+  }
+}
+
+const CELL  = 16;
 const COLS  = 50;
 const ROWS  = 50;
 
@@ -138,14 +242,20 @@ class Player {
     this.trailSet = new Set();
   }
 
-  draw() {
-    // draw trail cells
-    ctx.fillStyle = this.trailColor;
-    for (const { row, col } of this.trail) {
-      ctx.fillRect(col * CELL, row * CELL, CELL, CELL);
-    }
+  respawn(grid) {
+    const spawn = findFreeSpawn(grid);
+    if (!spawn) return false;
+    this.row = spawn.row; this.col = spawn.col;
+    this.x = spawn.col * CELL; this.y = spawn.row * CELL;
+    this.trail = []; this.trailSet = new Set();
+    this.initTerritory(grid);
+    return true;
+  }
 
-    // draw player square on top
+  draw() {
+    ctx.fillStyle = this.trailColor;
+    for (const { row, col } of this.trail)
+      ctx.fillRect(col * CELL, row * CELL, CELL, CELL);
     ctx.fillStyle = this.color;
     ctx.fillRect(this.x, this.y, CELL, CELL);
   }
@@ -251,11 +361,20 @@ class Enemy {
     this.trailSet = new Set();
   }
 
+  respawn(grid) {
+    const spawn = findFreeSpawn(grid);
+    if (!spawn) return false;
+    this.row = spawn.row; this.col = spawn.col;
+    this.x = spawn.col * CELL; this.y = spawn.row * CELL;
+    this.trail = []; this.trailSet = new Set();
+    this.initTerritory(grid);
+    return true;
+  }
+
   draw() {
     ctx.fillStyle = this.trailColor;
     for (const { row, col } of this.trail)
       ctx.fillRect(col * CELL, row * CELL, CELL, CELL);
-
     ctx.fillStyle = this.color;
     ctx.fillRect(this.x, this.y, CELL, CELL);
   }
@@ -273,28 +392,35 @@ const grid   = new Grid();
 const player = new Player();
 player.initTerritory(grid);
 
-// Place enemies in the four quadrant corners, away from the player's center start
-const ENEMY_STARTS = [
-  { row: 8,          col: 8          },
-  { row: 8,          col: COLS - 9   },
-  { row: ROWS - 9,   col: 8          },
-  { row: ROWS - 9,   col: COLS - 9   },
-];
-const enemies = ENEMY_STARTS.map(({ row, col }, i) => {
-  const e = new Enemy(row, col, ENEMY_COLORS[i]);
+const enemies = ENEMY_COLORS.map(color => {
+  const spawn = findFreeSpawn(grid);
+  if (!spawn) return null;
+  const e = new Enemy(spawn.row, spawn.col, color);
   e.initTerritory(grid);
   return e;
-});
+}).filter(Boolean);
 
-function drawGameOver() {
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 48px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('YOU LOST', canvas.width / 2, canvas.height / 2 - 20);
-  ctx.font = '20px sans-serif';
-  ctx.fillText('Refresh to play again', canvas.width / 2, canvas.height / 2 + 24);
+function findFreeSpawn(grid) {
+  const CHECK = TERRITORY_RADIUS + 1; // one extra cell buffer around the new territory
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const r = Math.floor(Math.random() * ROWS);
+    const c = Math.floor(Math.random() * COLS);
+    let free = true;
+    for (let dr = -CHECK; dr <= CHECK && free; dr++)
+      for (let dc = -CHECK; dc <= CHECK && free; dc++) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS || grid.cells[nr][nc] !== null)
+          free = false;
+      }
+    if (free) return { row: r, col: c };
+  }
+  return null;
+}
+
+function clearTerritory(color) {
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (grid.cells[r][c] === color) grid.cells[r][c] = null;
 }
 
 function transferTerritory(deadColor, killerColor) {
@@ -304,126 +430,116 @@ function transferTerritory(deadColor, killerColor) {
 }
 
 function checkCollisions() {
-  let playerDead = false;
-  let playerKiller = null;
-
-  // ── territory hits ────────────────────────────────────────────────────────
-  // stepping into an owned territory cell kills the intruder
-  const territorySurviving = enemies.filter(e => {
-    if (grid.cells[e.row][e.col] === player.color) {
-      // enemy entered player's territory → enemy dies, player gets their territory
-      transferTerritory(e.color, player.color);
-      return false;
-    }
-    if (grid.cells[player.row][player.col] === e.color) {
-      // player entered enemy's territory → player dies, enemy gets player's territory
-      playerDead = true;
-      playerKiller = e;
-    }
-    return true;
-  });
-
-  // enemy-vs-enemy territory hits
-  const territoryDeadEnemies = new Set();
-  for (let i = 0; i < territorySurviving.length; i++) {
-    for (let j = 0; j < territorySurviving.length; j++) {
-      if (i === j || territoryDeadEnemies.has(i)) continue;
-      const intruder = territorySurviving[i];
-      const owner    = territorySurviving[j];
-      if (grid.cells[intruder.row][intruder.col] === owner.color) {
-        territoryDeadEnemies.add(i);
-        transferTerritory(intruder.color, owner.color);
-      }
-    }
-  }
-  const afterTerritory = territorySurviving.filter((_, i) => !territoryDeadEnemies.has(i));
+  const deadEnemyIndices = new Set();
 
   // ── trail hits ────────────────────────────────────────────────────────────
-  const trailSurviving = afterTerritory.filter(e => {
-    if (player.trailSet.has(`${e.row},${e.col}`)) {
-      // enemy touched player's trail → player (trail owner) dies
-      playerDead = true;
-      playerKiller = e;
+  enemies.forEach((e, i) => {
+    if (player.trailSet.has(`${e.row},${e.col}`) && playerAlive) {
+      // enemy touched player's trail → reset player progress
+      clearTerritory(player.color);
+      player.trail = []; player.trailSet = new Set();
+      playerAlive = false;
+      deathScreen.classList.add('visible');
     }
     if (e.trailSet.has(`${player.row},${player.col}`)) {
-      // player touched enemy's trail → enemy (trail owner) dies, player gets territory
+      // player touched enemy's trail → enemy respawns
       transferTerritory(e.color, player.color);
-      return false;
+      deadEnemyIndices.add(i);
     }
-    return true;
   });
 
-  // ── enemy-vs-enemy trail hits ─────────────────────────────────────────────
-  // touching an enemy's trail kills that enemy (trail owner loses)
-  const trailDeadEnemies = new Set();
-  for (let i = 0; i < trailSurviving.length; i++) {
-    for (let j = 0; j < trailSurviving.length; j++) {
-      if (i === j || trailDeadEnemies.has(j)) continue;
-      const mover = trailSurviving[i];
-      const owner = trailSurviving[j];
-      if (owner.trailSet.has(`${mover.row},${mover.col}`)) {
-        // mover touched owner's trail → owner dies, mover gets territory
-        trailDeadEnemies.add(j);
-        transferTerritory(owner.color, mover.color);
+  // enemy-vs-enemy trail hits
+  for (let i = 0; i < enemies.length; i++) {
+    for (let j = 0; j < enemies.length; j++) {
+      if (i === j || deadEnemyIndices.has(j)) continue;
+      if (enemies[j].trailSet.has(`${enemies[i].row},${enemies[i].col}`)) {
+        transferTerritory(enemies[j].color, enemies[i].color);
+        deadEnemyIndices.add(j);
       }
     }
   }
-  const bodyCheckList = trailSurviving.filter((_, i) => !trailDeadEnemies.has(i));
 
   // ── body-to-body hits ─────────────────────────────────────────────────────
-  // The mover (attacker) kills the target and gains their territory.
-  const deadEnemies = new Set();
+  enemies.forEach((a, i) => {
+    if (deadEnemyIndices.has(i)) return;
 
-  for (let i = 0; i < bodyCheckList.length; i++) {
-    const a = bodyCheckList[i];
-
-    // enemy moved onto player's cell → player dies, enemy gets territory
-    if (a.row === player.row && a.col === player.col) {
-      playerDead = true;
-      playerKiller = a;
+    // enemy moved onto player → reset player progress
+    if (a.row === player.row && a.col === player.col && playerAlive) {
+      clearTerritory(player.color);
+      player.trail = []; player.trailSet = new Set();
+      playerAlive = false;
+      deathScreen.classList.add('visible');
     }
 
-    // player moved onto enemy's cell → enemy dies, player gets territory
-    if (!deadEnemies.has(i) && player.row === a.row && player.col === a.col) {
-      deadEnemies.add(i);
+    // player moved onto enemy → enemy respawns
+    if (playerAlive && player.row === a.row && player.col === a.col) {
       transferTerritory(a.color, player.color);
+      deadEnemyIndices.add(i);
     }
 
-    // enemy A runs into enemy B's body → B dies, A gets territory
-    for (let j = 0; j < bodyCheckList.length; j++) {
-      if (i === j || deadEnemies.has(j)) continue;
-      const b = bodyCheckList[j];
+    // enemy A onto enemy B → B respawns
+    for (let j = 0; j < enemies.length; j++) {
+      if (i === j || deadEnemyIndices.has(j)) continue;
+      const b = enemies[j];
       if (a.row === b.row && a.col === b.col) {
-        deadEnemies.add(j);
         transferTerritory(b.color, a.color);
+        deadEnemyIndices.add(j);
       }
+    }
+  });
+
+  // respawn dead enemies; remove those with no free space
+  const survived = enemies.filter((e, i) => {
+    if (!deadEnemyIndices.has(i)) return true;
+    return e.respawn(grid); // false = no space, drop them
+  });
+  enemies.length = 0;
+  survived.forEach(e => enemies.push(e));
+}
+
+function drawMinimap() {
+  const W = miniCanvas.width;
+  const H = miniCanvas.height;
+  const cw = W / COLS;
+  const ch = H / ROWS;
+
+  mctx.clearRect(0, 0, W, H);
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      mctx.fillStyle = grid.cells[r][c] ?? '#16213e';
+      mctx.fillRect(c * cw, r * ch, cw, ch);
     }
   }
 
-  const bodySurviving = bodyCheckList.filter((_, i) => !deadEnemies.has(i));
+  // player dot
+  mctx.fillStyle = '#fff';
+  mctx.fillRect(player.col * cw, player.row * ch, cw, ch);
 
-  enemies.length = 0;
-  bodySurviving.forEach(e => enemies.push(e));
-
-  if (playerDead && playerKiller) transferTerritory(player.color, playerKiller.color);
-
-  return playerDead;
+  // enemy dots
+  enemies.forEach(e => {
+    mctx.fillStyle = '#fff';
+    mctx.fillRect(e.col * cw, e.row * ch, cw, ch);
+  });
 }
 
-function loop() {
-  player.update(keys, grid);
-  enemies.forEach(e => e.update(grid));
+function loop(ts) {
+  if (playerAlive) player.update(keys, grid);
 
-  const playerDead = checkCollisions();
+  if (gameState === 'playing') {
+    enemies.forEach(e => e.update(grid));
+    checkCollisions();
+    if (playerAlive && allCellsOwned()) triggerWin();
+  }
+
+  if (gameState === 'won') updateWin(ts);
 
   grid.draw();
+  drawPickups();
   enemies.forEach(e => e.draw());
   player.draw();
 
-  if (playerDead) {
-    drawGameOver();
-    return;
-  }
+  drawMinimap();
 
   requestAnimationFrame(loop);
 }

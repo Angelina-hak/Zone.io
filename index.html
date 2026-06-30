@@ -5,12 +5,123 @@
   <title>Zone.io</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a1a2e; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-    canvas { background: #16213e; display: block; }
+    body { background: #0a0a1a; overflow: hidden; }
+
+    #gameCanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+    }
+
+    /* ── Minimap ── */
+    #minimap-wrap {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(10,10,26,0.85);
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      padding: 6px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      pointer-events: none;
+    }
+    #minimap-label { color: #aaa; font: 11px/1 sans-serif; letter-spacing: 1px; text-transform: uppercase; }
+    #minimap { display: block; image-rendering: pixelated; }
+
+    /* ── Top timer bar (win phase) ── */
+    #timer-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 32px;
+      background: rgba(10,10,26,0.92);
+      border-bottom: 1px solid #2a2a4a;
+      padding: 10px 24px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #timer-bar.visible { display: flex; }
+    #timer-bar .label  { color: #aaa; font: 12px sans-serif; text-transform: uppercase; letter-spacing: 1px; }
+    #win-text   { color: #ffd700; font: bold 20px sans-serif; }
+    #timer-text { color: #06d6a0; font: bold 28px sans-serif; }
+    #coin-text  { color: #ffbe0b; font: bold 20px sans-serif; }
+
+    /* ── Death screen ── */
+    #death-screen {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.65);
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 24px;
+      z-index: 20;
+    }
+    #death-screen.visible { display: flex; }
+    #death-screen h1 { color: #e94560; font: bold 56px sans-serif; letter-spacing: 2px; }
+    #play-btn {
+      background: #e94560; color: #fff;
+      border: none; border-radius: 8px;
+      font: bold 22px sans-serif;
+      padding: 12px 48px; cursor: pointer;
+      transition: background 0.15s;
+    }
+    #play-btn:hover { background: #c73652; }
+
+    /* ── Score screen (shown when win timer ends) ── */
+    #score-screen {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.75);
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px;
+      z-index: 20;
+    }
+    #score-screen.visible { display: flex; }
+    #score-screen h1 { color: #ffd700; font: bold 48px sans-serif; }
+    #score-screen p  { color: #fff; font: 26px sans-serif; }
   </style>
 </head>
 <body>
   <canvas id="gameCanvas"></canvas>
+
+  <!-- Win-phase top bar -->
+  <div id="timer-bar">
+    <span id="win-text">★ YOU WIN!</span>
+    <span>
+      <span class="label">Time </span>
+      <span id="timer-text">6.0s</span>
+    </span>
+    <span>
+      <span class="label">Coins </span>
+      <span id="coin-text">0</span>
+    </span>
+  </div>
+
+  <!-- Death overlay -->
+  <div id="death-screen">
+    <h1>You lose</h1>
+    <button id="play-btn">Play</button>
+  </div>
+
+  <!-- End-of-round score -->
+  <div id="score-screen">
+    <h1>Time's up!</h1>
+    <p id="score-text">You collected 0 coins</p>
+  </div>
+
+  <div id="minimap-wrap">
+    <span id="minimap-label">Map</span>
+    <canvas id="minimap" width="150" height="150"></canvas>
+  </div>
+
   <script src="game.js"></script>
 </body>
 </html>
