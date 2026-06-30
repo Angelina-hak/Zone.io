@@ -47,6 +47,9 @@ class Player {
     this.x = this.col * CELL;
     this.y = this.row * CELL;
     this.color = '#e94560';
+    this.trailColor = '#ff8fa3';  // lighter pink for the trail
+    this.trail = [];              // ordered list of {row, col}
+    this.trailSet = new Set();    // fast lookup
   }
 
   initTerritory(grid) {
@@ -59,7 +62,7 @@ class Player {
     }
   }
 
-  update(keys) {
+  update(keys, grid) {
     if (keys['ArrowUp'])    this.y -= this.speed;
     if (keys['ArrowDown'])  this.y += this.speed;
     if (keys['ArrowLeft'])  this.x -= this.speed;
@@ -68,11 +71,40 @@ class Player {
     this.x = Math.max(0, Math.min(canvas.width  - CELL, this.x));
     this.y = Math.max(0, Math.min(canvas.height - CELL, this.y));
 
-    this.col = Math.floor(this.x / CELL);
-    this.row = Math.floor(this.y / CELL);
+    const newCol = Math.floor(this.x / CELL);
+    const newRow = Math.floor(this.y / CELL);
+
+    if (newCol !== this.col || newRow !== this.row) {
+      this.col = newCol;
+      this.row = newRow;
+      this._updateTrail(grid);
+    }
+  }
+
+  _updateTrail(grid) {
+    const inTerritory = grid.cells[this.row][this.col] === this.color;
+
+    if (inTerritory) {
+      // stepped back onto own territory — clear trail
+      this.trail = [];
+    } else {
+      // mark this cell as trail if not already
+      const key = `${this.row},${this.col}`;
+      if (!this.trailSet.has(key)) {
+        this.trailSet.add(key);
+        this.trail.push({ row: this.row, col: this.col });
+      }
+    }
   }
 
   draw() {
+    // draw trail cells
+    ctx.fillStyle = this.trailColor;
+    for (const { row, col } of this.trail) {
+      ctx.fillRect(col * CELL, row * CELL, CELL, CELL);
+    }
+
+    // draw player square on top
     ctx.fillStyle = this.color;
     ctx.fillRect(this.x, this.y, CELL, CELL);
   }
@@ -91,7 +123,7 @@ const player = new Player();
 player.initTerritory(grid);
 
 function loop() {
-  player.update(keys);
+  player.update(keys, grid);
 
   grid.draw();
   player.draw();
